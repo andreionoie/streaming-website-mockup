@@ -18,7 +18,6 @@ import logo from './YouTube_Premium_logo.svg'
 import googlePayIcon from './google_pay.png'
 import ethIcon from './ethereum.svg'
 
-import EntityRegistry from "./contracts/EntityRegistry.json";
 import EntityOfferRegistry from "./contracts/EntityOfferRegistry.json";
 
 const useStyles = (theme) => ({
@@ -37,6 +36,12 @@ const useStyles = (theme) => ({
     color: "#FFFFFF",
     display:'flex'
   },
+  section1_green: {
+    padding: theme.spacing(2),
+    backgroundColor: "#4caf50",
+    color: "#FFFFFF",
+    display:'flex'
+  },
   section2: {
     padding: theme.spacing(2),
     backgroundColor: "#F2F2F2",
@@ -52,9 +57,15 @@ const useStyles = (theme) => ({
 });
 
 class App extends Component {
+  offerRegistryContractAddress = '0x03Ec0Eb65c2ADA82331F6Bf2cf0eDd1eAe64e02F';
+  offerIndex = 0;
+  subscriptionDuration = 30 * 24 * 3600;
+
   state = {
             isLoaded: false,
-            accounts: null
+            accounts: null,
+            subscriptionIsActive: false,
+            validUntil: null
           };
 
   componentDidMount = async () => {
@@ -62,9 +73,13 @@ class App extends Component {
     window.App = this;
     
     this.web3 = await this.getWeb3Metamask();
+    await this.getContract();
+
     this.handleMetamaskAccountChange();
     await this.updateAccounts();
-    
+
+    await this.checkActiveSubscription();
+
     this.setState({ isLoaded: true });
     console.log(this.state);
   };
@@ -94,6 +109,7 @@ class App extends Component {
     if (window.ethereum) {
       window.ethereum.on('accountsChanged', async () => {
         await this.updateAccounts();
+        await this.checkActiveSubscription();
       });
     }
   }
@@ -114,6 +130,46 @@ class App extends Component {
       console.error(error);
     }
   }
+
+  getContract = async () => {
+    this.offerRegistryContract = new this.web3.eth.Contract(EntityOfferRegistry.abi, this.offerRegistryContractAddress);
+  }
+
+  checkActiveSubscription = async () => {
+    let isActiveSubscription = false;
+    try {
+      let isActive = await this.offerRegistryContract.methods.isSubscriptionActive(this.state.accounts[0], this.offerIndex).call();
+      console.log(isActive);
+      if (isActive) {
+        isActiveSubscription = true;
+        let expirationTimestamp = await this.offerRegistryContract.methods.subscribers(this.state.accounts[0], this.offerIndex).call();
+        let expirationString = (new Date(expirationTimestamp*1000)).toLocaleString();
+        this.setState( { validUntil: expirationString } )
+      }
+    } catch (err) {
+      console.log(err);
+    }
+
+    this.setState( { subscriptionIsActive: isActiveSubscription } );
+  }
+
+  sendSubscriptionTransaction = async () => {
+    try {
+      let amount = await this.offerRegistryContract.methods.computeFee(this.offerIndex, this.subscriptionDuration).call();
+      
+      let emitter = this.offerRegistryContract.events.SubscriptionAdded({ filter: { offerIndex: this.offerIndex, newSubscriptionOwner: this.state.accounts[0] } })
+        .on("data", async (evt) => {
+          // evt.returnValues = {offerIndex, newSubscriptionOwner, expirationTimestamp, duration}
+          console.log("Subscription valid until ", (new Date(evt.returnValues.expirationTimestamp*1000)).toLocaleString());
+          await this.checkActiveSubscription();
+        });
+
+      await this.offerRegistryContract.methods.newSubscription(this.offerIndex, this.subscriptionDuration).send({ from: this.state.accounts[0], gasLimit: 8000000, value: amount });
+    } catch(err) {
+      console.log(err);
+    }
+  }
+
 
   render() {
     const { classes } = this.props;
@@ -138,12 +194,12 @@ class App extends Component {
             <div className={classes.logo}>
               <Grid container justify="center">
                 <Grid item align="center">
-                  <img src={logo} />
+                  <img src={logo} alt="Youtube Premium"/>
                 </Grid>
               </Grid>
             </div>
 
-            <div className={classes.section1}>
+            <div className={ this.state.subscriptionIsActive ? classes.section1_green : classes.section1 }>
               <Grid container>
                 <Grid item xs>
                   <Typography variant="h6">
@@ -156,8 +212,13 @@ class App extends Component {
                 </Grid>
                 <Grid item >
                   <Typography gutterBottom variant="h6">
-                    Free trial
+                  { this.state.subscriptionIsActive ? 'Subscription Active' : 'Free trial' }
                   </Typography>
+                  { this.state.subscriptionIsActive && 
+                    <Typography variant="body2">
+                      Valid until {this.state.validUntil}
+                    </Typography>
+                  }
                 </Grid>
               </Grid>
             </div>
@@ -203,18 +264,18 @@ class App extends Component {
                 <RadioGroup aria-label="gender" name="gender1">
                   <FormControlLabel disabled control={<Radio />}
                     label={
-                      <a>
-                        <img src={googlePayIcon} height="20" style={{ verticalAlign: 'middle' }}/>
+                      <div>
+                        <img src={googlePayIcon} alt="googlePayIcon" height="20" style={{ verticalAlign: 'middle' }}/>
                         &nbsp;&nbsp;Add credit or debit card
-                      </a>
+                      </div>
                     }
                   />
                   <FormControlLabel control={<Radio />}
                     label={
-                      <a>
-                        <img src={ethIcon} height="40" style={{ verticalAlign: 'middle' }} />
+                      <div>
+                        <img src={ethIcon} alt="ethIcon" height="40" style={{ verticalAlign: 'middle' }} />
                         &nbsp;&nbsp;Pay with ETH
-                      </a>
+                      </div>
                     }
                   />
                 </RadioGroup>
@@ -223,7 +284,7 @@ class App extends Component {
 
             <div className={classes.section4}>
               <Grid container justify="flex-end">
-                <Button color="secondary" variant="contained">Buy</Button>
+                <Button color="secondary" variant="contained" disabled={this.state.subscriptionIsActive} onClick={this.sendSubscriptionTransaction}>Buy</Button>
               </Grid>
             </div></Box>
           </div>
